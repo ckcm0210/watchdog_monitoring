@@ -1,0 +1,4 @@
+watchdog>=2.1.0
+openpyxl>=3.0.0
+psutil>=5.8.0
+wcwidth>=0.2.5
