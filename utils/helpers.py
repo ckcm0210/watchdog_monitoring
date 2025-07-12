@@ -7,6 +7,10 @@ import json
 import threading
 from datetime import datetime
 import config.settings as settings
+from utils.logging import get_logger
+
+# 獲取日誌器
+logger = get_logger(__name__)
 
 def get_file_mtime(filepath):
     """
@@ -14,7 +18,20 @@ def get_file_mtime(filepath):
     """
     try:
         return datetime.fromtimestamp(os.path.getmtime(filepath)).strftime("%Y-%m-%d %H:%M:%S")
-    except Exception:
+    except FileNotFoundError:
+        logger.warning(f"檔案不存在，無法獲取修改時間：{filepath}")
+        return "Unknown"
+    except PermissionError:
+        logger.warning(f"無權限訪問檔案，無法獲取修改時間：{filepath}")
+        return "Unknown"
+    except OSError as e:
+        logger.error(f"獲取檔案修改時間時發生系統錯誤：{filepath} - {e}")
+        return "Unknown"
+    except (ValueError, OverflowError) as e:
+        logger.error(f"檔案修改時間無效：{filepath} - {e}")
+        return "Unknown"
+    except Exception as e:
+        logger.error(f"獲取檔案修改時間時發生未預期錯誤：{filepath} - {type(e).__name__}: {e}")
         return "Unknown"
 
 def human_readable_size(num_bytes):
@@ -55,7 +72,11 @@ def is_force_baseline_file(filepath):
             if pattern.lower() in filepath.lower(): 
                 return True
         return False
-    except Exception: 
+    except (AttributeError, TypeError) as e:
+        logger.warning(f"檢查強制baseline檔案時發生設定錯誤：{filepath} - {e}")
+        return False
+    except Exception as e:
+        logger.error(f"檢查強制baseline檔案時發生未預期錯誤：{filepath} - {type(e).__name__}: {e}")
         return False
 
 def save_progress(completed_files, total_files):
@@ -77,7 +98,20 @@ def save_progress(completed_files, total_files):
         
         with open(settings.RESUME_LOG_FILE, 'w', encoding='utf-8') as f: 
             json.dump(progress_data, f, ensure_ascii=False, indent=2)
-    except Exception as e: 
+    except FileNotFoundError as e:
+        logger.error(f"無法創建進度檔案目錄：{e}")
+        print(f"[WARN] 無法儲存進度: 目錄不存在")
+    except PermissionError as e:
+        logger.warning(f"無權限寫入進度檔案：{e}")
+        print(f"[WARN] 無法儲存進度: 權限被拒絕")
+    except (OSError, IOError) as e:
+        logger.error(f"儲存進度時發生I/O錯誤：{e}")
+        print(f"[WARN] 無法儲存進度: I/O錯誤")
+    except (TypeError, ValueError) as e:
+        logger.error(f"序列化進度數據時發生錯誤：{e}")
+        print(f"[WARN] 無法儲存進度: 數據錯誤")
+    except Exception as e:
+        logger.error(f"儲存進度時發生未預期錯誤：{type(e).__name__}: {e}")
         print(f"[WARN] 無法儲存進度: {e}")
 
 def load_progress():
@@ -90,7 +124,23 @@ def load_progress():
     try:
         with open(settings.RESUME_LOG_FILE, 'r', encoding='utf-8') as f: 
             return json.load(f)
+    except FileNotFoundError:
+        logger.debug("進度檔案不存在")
+        return None
+    except PermissionError as e:
+        logger.warning(f"無權限讀取進度檔案：{e}")
+        print(f"[WARN] 無法載入進度: 權限被拒絕")
+        return None
+    except (OSError, IOError) as e:
+        logger.error(f"讀取進度檔案時發生I/O錯誤：{e}")
+        print(f"[WARN] 無法載入進度: I/O錯誤")
+        return None
+    except json.JSONDecodeError as e:
+        logger.error(f"進度檔案格式錯誤：{e}")
+        print(f"[WARN] 無法載入進度: 檔案格式錯誤")
+        return None
     except Exception as e:
+        logger.error(f"載入進度時發生未預期錯誤：{type(e).__name__}: {e}")
         print(f"[WARN] 無法載入進度: {e}")
         return None
 

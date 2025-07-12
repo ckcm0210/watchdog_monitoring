@@ -2,6 +2,8 @@
 日誌和打印功能
 """
 import builtins
+import logging
+import os
 from datetime import datetime
 from io import StringIO
 from wcwidth import wcswidth, wcwidth
@@ -54,7 +56,66 @@ def init_logging():
     """
     初始化日誌系統
     """
+    # 設置原有的時間戳打印系統
     builtins.print = timestamped_print
+    
+    # 設置專業級日誌系統
+    setup_professional_logging()
+
+def setup_professional_logging():
+    """
+    設置專業級日誌系統
+    """
+    # 創建自定義格式化器
+    class ChineseFormatter(logging.Formatter):
+        """支持中文的自定義格式化器"""
+        
+        def format(self, record):
+            # 添加中文級別名稱
+            level_names = {
+                'DEBUG': '調試',
+                'INFO': '信息', 
+                'WARNING': '警告',
+                'ERROR': '錯誤',
+                'CRITICAL': '嚴重'
+            }
+            
+            record.level_zh = level_names.get(record.levelname, record.levelname)
+            return super().format(record)
+    
+    # 獲取根日誌器
+    logger = logging.getLogger()
+    logger.setLevel(logging.DEBUG)
+    
+    # 避免重複添加處理器
+    if logger.handlers:
+        return
+    
+    # 創建控制台處理器
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    
+    # 設置格式
+    formatter = ChineseFormatter(
+        '[%(asctime)s] [%(level_zh)s] %(name)s: %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    console_handler.setFormatter(formatter)
+    
+    # 添加處理器
+    logger.addHandler(console_handler)
+
+def get_logger(name=None):
+    """
+    獲取日誌器實例
+    
+    Args:
+        name: 日誌器名稱，通常使用 __name__
+        
+    Returns:
+        logging.Logger: 日誌器實例
+    """
+    return logging.getLogger(name or 'watchdog_monitoring')
 
 def wrap_text_with_cjk_support(text, width):
     """
