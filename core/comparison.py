@@ -9,10 +9,13 @@ import time
 from datetime import datetime
 from wcwidth import wcwidth
 import config.settings as settings
-from utils.logging import _get_display_width
+from utils.logging import _get_display_width, get_logger
 from utils.helpers import get_file_mtime
 from core.excel_parser import pretty_formula, extract_external_refs, get_excel_last_author
 from core.baseline import load_baseline, baseline_file_path
+
+# 獲取日誌器
+logger = get_logger(__name__)
 
 def print_aligned_console_diff(old_data, new_data, file_info=None):
     """
@@ -174,7 +177,11 @@ def format_timestamp_for_display(timestamp_str):
         # 如果已經是正確格式，直接返回
         return timestamp_str
         
-    except Exception:
+    except (ValueError, TypeError) as e:
+        logger.debug(f"時間戳格式轉換時發生錯誤：{e}")
+        return timestamp_str
+    except Exception as e:
+        logger.warning(f"格式化時間戳時發生未預期錯誤：{type(e).__name__}: {e}")
         return timestamp_str
 
 def compare_excel_changes(file_path, silent=False, event_number=None, is_polling=False):
@@ -273,8 +280,12 @@ def compare_excel_changes(file_path, silent=False, event_number=None, is_polling
                 # 記錄變更到 CSV
                 try:
                     log_changes_to_csv(file_path, worksheet_name, old_display_data, new_display_data, old_baseline)
-                except Exception:
-                    pass
+                except (OSError, IOError) as e:
+                    logger.error(f"寫入CSV日誌時發生I/O錯誤：{e}")
+                except PermissionError as e:
+                    logger.warning(f"無權限寫入CSV日誌：{e}")
+                except Exception as e:
+                    logger.error(f"記錄變更到CSV時發生未預期錯誤：{type(e).__name__}: {e}")
         
         # 🔥 重要：如果發現變更，立即更新基準線以避免重複顯示
         if has_changes and not silent:
@@ -302,7 +313,18 @@ def compare_excel_changes(file_path, silent=False, event_number=None, is_polling
         
         return has_changes
         
+    except FileNotFoundError as e:
+        logger.error(f"Excel檔案不存在：{file_path} - {e}")
+        if not silent:
+            print(f"❌ 比較過程出錯: 檔案不存在")
+        return False
+    except PermissionError as e:
+        logger.warning(f"無權限訪問Excel檔案：{file_path} - {e}")
+        if not silent:
+            print(f"❌ 比較過程出錯: 權限被拒絕")
+        return False
     except Exception as e:
+        logger.error(f"比較Excel變更時發生未預期錯誤：{file_path} - {type(e).__name__}: {e}")
         if not silent:
             print(f"❌ 比較過程出錯: {e}")
         return False
@@ -496,8 +518,14 @@ def log_meaningful_changes_to_csv(file_path, worksheet_name, changes, baseline_d
         
         print(f"📝 有意義變更已記錄到 CSV")
         
-    except Exception:
-        pass
+    except FileNotFoundError as e:
+        logger.error(f"CSV日誌檔案目錄不存在：{e}")
+    except PermissionError as e:
+        logger.warning(f"無權限寫入CSV日誌檔案：{e}")
+    except (OSError, IOError) as e:
+        logger.error(f"寫入CSV日誌時發生I/O錯誤：{e}")
+    except Exception as e:
+        logger.error(f"記錄有意義變更到CSV時發生未預期錯誤：{type(e).__name__}: {e}")
 
 def update_baseline_after_meaningful_changes(file_path, base_name, current_data):
     """
@@ -572,8 +600,14 @@ def log_changes_to_csv(file_path, worksheet_name, old_data, new_data, baseline_d
         
         print(f"📝 變更已記錄到 CSV")
         
-    except Exception:
-        pass
+    except FileNotFoundError as e:
+        logger.error(f"CSV日誌檔案目錄不存在：{e}")
+    except PermissionError as e:
+        logger.warning(f"無權限寫入CSV日誌檔案：{e}")
+    except (OSError, IOError) as e:
+        logger.error(f"寫入CSV日誌時發生I/O錯誤：{e}")
+    except Exception as e:
+        logger.error(f"記錄變更到CSV時發生未預期錯誤：{type(e).__name__}: {e}")
 
 # 保留輔助函數
 def should_filter_change(change):

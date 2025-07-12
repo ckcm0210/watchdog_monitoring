@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 import config.settings as settings
 from utils.helpers import save_progress, load_progress
 from utils.memory import check_memory_limit, get_memory_usage
+from utils.logging import get_logger
 from utils.compression import (
     CompressionFormat, 
     save_compressed_file, 
@@ -19,6 +20,9 @@ from utils.compression import (
     get_compression_stats,
     migrate_baseline_format
 )
+
+# 獲取日誌器
+logger = get_logger(__name__)
 from core.excel_parser import dump_excel_cells_with_timeout, hash_excel_content, get_excel_last_author
 
 def baseline_file_path(base_name):
@@ -63,7 +67,23 @@ def load_baseline(baseline_file_or_base_name):
         
         return data
         
+    except FileNotFoundError:
+        logger.debug(f"基準線檔案不存在：{baseline_file_or_base_name}")
+        return None
+    except PermissionError as e:
+        logger.warning(f"無權限讀取基準線檔案：{baseline_file_or_base_name} - {e}")
+        print(f"[ERROR] 載入基準線失敗 {baseline_file_or_base_name}: 權限被拒絕")
+        return None
+    except (OSError, IOError) as e:
+        logger.error(f"讀取基準線檔案時發生I/O錯誤：{baseline_file_or_base_name} - {e}")
+        print(f"[ERROR] 載入基準線失敗 {baseline_file_or_base_name}: I/O錯誤")
+        return None
+    except (json.JSONDecodeError, ValueError) as e:
+        logger.error(f"基準線檔案格式錯誤：{baseline_file_or_base_name} - {e}")
+        print(f"[ERROR] 載入基準線失敗 {baseline_file_or_base_name}: 檔案格式錯誤")
+        return None
     except Exception as e:
+        logger.error(f"載入基準線時發生未預期錯誤：{baseline_file_or_base_name} - {type(e).__name__}: {e}")
         print(f"[ERROR] 載入基準線失敗 {baseline_file_or_base_name}: {e}")
         return None
 
@@ -109,7 +129,16 @@ def save_baseline(baseline_file_or_base_name, data):
                     try:
                         os.remove(old_file)
                         # 移除： print(f"[DEBUG] 清理舊格式檔案: {os.path.basename(old_file)}")
+                    except FileNotFoundError:
+                        logger.debug(f"舊檔案已不存在，跳過清理：{old_file}")
+                    except PermissionError as e:
+                        logger.warning(f"無權限刪除舊檔案：{old_file} - {e}")
+                        print(f"[ERROR] 清理舊檔案失敗: 權限被拒絕")
+                    except OSError as e:
+                        logger.error(f"刪除舊檔案時發生系統錯誤：{old_file} - {e}")
+                        print(f"[ERROR] 清理舊檔案失敗: {e}")
                     except Exception as e:
+                        logger.error(f"清理舊檔案時發生未預期錯誤：{old_file} - {type(e).__name__}: {e}")
                         print(f"[ERROR] 清理舊檔案失敗: {e}")
         
         # 保存新檔案
@@ -125,7 +154,20 @@ def save_baseline(baseline_file_or_base_name, data):
         
         return True
         
+    except FileNotFoundError as e:
+        logger.error(f"無法創建基準線檔案目錄：{baseline_file_or_base_name} - {e}")
+        print(f"[ERROR] 保存基準線失敗 {baseline_file_or_base_name}: 目錄不存在")
+        return False
+    except PermissionError as e:
+        logger.warning(f"無權限寫入基準線檔案：{baseline_file_or_base_name} - {e}")
+        print(f"[ERROR] 保存基準線失敗 {baseline_file_or_base_name}: 權限被拒絕")
+        return False
+    except (OSError, IOError) as e:
+        logger.error(f"保存基準線檔案時發生I/O錯誤：{baseline_file_or_base_name} - {e}")
+        print(f"[ERROR] 保存基準線失敗 {baseline_file_or_base_name}: I/O錯誤")
+        return False
     except Exception as e:
+        logger.error(f"保存基準線時發生未預期錯誤：{baseline_file_or_base_name} - {type(e).__name__}: {e}")
         print(f"[ERROR] 保存基準線失敗 {baseline_file_or_base_name}: {e}")
         return False
 
@@ -157,7 +199,17 @@ def archive_old_baselines():
         if archive_count > 0:
             print(f"[ARCHIVE] 共歸檔了 {archive_count} 個基準線檔案")
     
+    except FileNotFoundError as e:
+        logger.error(f"歸檔目錄或檔案不存在：{e}")
+        print(f"[ERROR] 歸檔過程出錯: 檔案不存在")
+    except PermissionError as e:
+        logger.warning(f"歸檔過程權限被拒絕：{e}")
+        print(f"[ERROR] 歸檔過程出錯: 權限被拒絕")
+    except (OSError, IOError) as e:
+        logger.error(f"歸檔過程發生I/O錯誤：{e}")
+        print(f"[ERROR] 歸檔過程出錯: I/O錯誤")
     except Exception as e:
+        logger.error(f"歸檔過程發生未預期錯誤：{type(e).__name__}: {e}")
         print(f"[ERROR] 歸檔過程出錯: {e}")
 
 def create_baseline_for_files_robust(xlsx_files, skip_force_baseline=True):
@@ -282,7 +334,18 @@ def create_baseline_for_files_robust(xlsx_files, skip_force_baseline=True):
             print(f"  耗時: {time.time() - file_start_time:.2f} 秒\n")
             save_progress(i + 1, total)
             
+        except FileNotFoundError as e:
+            logger.error(f"Excel檔案不存在：{xlsx_file} - {e}")
+            print(f"  結果: [FILE_NOT_FOUND]\n  錯誤: 檔案不存在\n  耗時: {time.time() - file_start_time:.2f} 秒\n")
+            error_count += 1
+            save_progress(i + 1, total)
+        except PermissionError as e:
+            logger.warning(f"無權限訪問Excel檔案：{xlsx_file} - {e}")
+            print(f"  結果: [PERMISSION_DENIED]\n  錯誤: 權限被拒絕\n  耗時: {time.time() - file_start_time:.2f} 秒\n")
+            error_count += 1
+            save_progress(i + 1, total)
         except Exception as e:
+            logger.error(f"建立基準線時發生未預期錯誤：{xlsx_file} - {type(e).__name__}: {e}")
             print(f"  結果: [UNEXPECTED_ERROR]\n  錯誤: {e}\n  耗時: {time.time() - file_start_time:.2f} 秒\n")
             error_count += 1
             save_progress(i + 1, total)
@@ -314,7 +377,11 @@ def create_baseline_for_files_robust(xlsx_files, skip_force_baseline=True):
         try: 
             os.remove(settings.RESUME_LOG_FILE)
             print(f"🧹 清理進度檔案")
-        except Exception: 
-            pass
+        except FileNotFoundError:
+            logger.debug("進度檔案不存在，無需清理")
+        except PermissionError as e:
+            logger.warning(f"無權限刪除進度檔案：{e}")
+        except Exception as e:
+            logger.error(f"清理進度檔案時發生未預期錯誤：{type(e).__name__}: {e}")
     
     print("\n" + "=" * 90 + "\n")
