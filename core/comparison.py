@@ -179,7 +179,7 @@ def format_timestamp_for_display(timestamp_str):
 
 def compare_excel_changes(file_path, silent=False, event_number=None, is_polling=False):
     """
-    🔥 強制顯示 TABLE 的簡化版本
+    🔥 強制顯示 TABLE 的簡化版本 - 修正重複顯示問題
     """
     try:
         from core.excel_parser import dump_excel_cells_with_timeout
@@ -202,9 +202,16 @@ def compare_excel_changes(file_path, silent=False, event_number=None, is_polling
                 print(f"❌ 無法讀取檔案: {base_name}")
             return False
         
+        # 🔥 檢查內容是否真的有變化
+        baseline_cells = old_baseline.get('cells', {})
+        
+        # 快速比較 - 如果結構完全相同，跳過顯示
+        if baseline_cells == current_data:
+            return False
+        
         # 比較變更
         has_changes = False
-        baseline_cells = old_baseline.get('cells', {})
+        changes_found = False
         
         # 為每個工作表進行比較
         for worksheet_name in set(baseline_cells.keys()) | set(current_data.keys()):
@@ -214,7 +221,7 @@ def compare_excel_changes(file_path, silent=False, event_number=None, is_polling
             # 找出所有儲存格
             all_addresses = set(old_ws.keys()) | set(new_ws.keys())
             
-            # 🔥 強制準備顯示數據
+            # 🔥 準備顯示數據
             old_display_data = {}
             new_display_data = {}
             
@@ -227,10 +234,19 @@ def compare_excel_changes(file_path, silent=False, event_number=None, is_polling
                 old_formula = old_cell.get('formula')
                 new_formula = new_cell.get('formula')
                 
-                # 🔥 只要有任何變更就顯示
+                # 🔥 原本的邏輯：只要有任何變更就顯示
                 if old_val != new_val or old_formula != new_formula:
                     has_changes = True
-                    # 🔥 直接顯示值，不管任何設定
+                    changes_found = True
+                    
+                    # ⭐ 新增：外部參照特殊處理
+                    # 如果公式沒變但值有變，且包含外部參照，仍然要追蹤
+                    if (old_formula == new_formula and 
+                        old_val != new_val and 
+                        has_external_reference(old_formula)):
+                        print(f"🔗 外部參照更新: {addr} = {old_formula}")
+                    
+                    # 🔥 保持原本的顯示邏輯不變
                     old_display_data[addr] = old_val
                     new_display_data[addr] = new_val
             
@@ -260,12 +276,258 @@ def compare_excel_changes(file_path, silent=False, event_number=None, is_polling
                 except Exception:
                     pass
         
+        # 🔥 重要：如果發現變更，立即更新基準線以避免重複顯示
+        if has_changes and not silent:
+            # 獲取當前檔案的作者
+            try:
+                current_author = get_excel_last_author(file_path)
+            except:
+                current_author = 'Unknown'
+            
+            # 更新基準線
+            updated_baseline = {
+                "last_author": current_author,
+                "content_hash": f"updated_{int(time.time())}",  # 簡單的雜湊
+                "cells": current_data,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            # 保存更新的基準線
+            from core.baseline import save_baseline
+            if save_baseline(base_name, updated_baseline):
+                # 不顯示更新訊息，避免太多輸出
+                pass
+            else:
+                print(f"[WARNING] 基準線更新失敗: {base_name}")
+        
         return has_changes
         
     except Exception as e:
         if not silent:
             print(f"❌ 比較過程出錯: {e}")
         return False
+
+def analyze_meaningful_changes(old_ws, new_ws):
+    """
+    🧠 分析有意義的變更
+    """
+    meaningful_changes = []
+    
+    # 找出所有儲存格
+    all_addresses = set(old_ws.keys()) | set(new_ws.keys())
+    
+    for addr in all_addresses:
+        old_cell = old_ws.get(addr, {})
+        new_cell = new_ws.get(addr, {})
+        
+        old_val = old_cell.get('value')
+        new_val = new_cell.get('value')
+        old_formula = old_cell.get('formula')
+        new_formula = new_cell.get('formula')
+        
+        # 🔥 變更類型分析
+        change_type = classify_change_type(old_cell, new_cell)
+        
+        if change_type in ['FORMULA_CHANGE', 'DIRECT_VALUE_CHANGE', 'EXTERNAL_REF_UPDATE', 'CELL_ADDED', 'CELL_DELETED']:
+            meaningful_changes.append({
+                'address': addr,
+                'old_value': old_val,
+                'new_value': new_val,
+                'old_formula': old_formula,
+                'new_formula': new_formula,
+                'change_type': change_type
+            })
+    
+    return meaningful_changes
+
+def classify_change_type(old_cell, new_cell):
+    """
+    🔍 分類變更類型
+    """
+    old_val = old_cell.get('value')
+    new_val = new_cell.get('value')
+    old_formula = old_cell.get('formula')
+    new_formula = new_cell.get('formula')
+    
+    # 儲存格新增
+    if not old_cell and new_cell:
+        return 'CELL_ADDED'
+    
+    # 儲存格刪除
+    if old_cell and not new_cell:
+        return 'CELL_DELETED'
+    
+    # 公式有變更
+    if old_formula != new_formula:
+        return 'FORMULA_CHANGE'
+    
+    # 沒有公式，但值有變更（直接輸入的值）
+    if not old_formula and not new_formula and old_val != new_val:
+        return 'DIRECT_VALUE_CHANGE'
+    
+    # 有公式，公式沒變，但值有變更
+    if old_formula and new_formula and old_formula == new_formula and old_val != new_val:
+        # 檢查是否為外部參照
+        if has_external_reference(old_formula):
+            return 'EXTERNAL_REF_UPDATE'
+        else:
+            return 'INDIRECT_CHANGE'  # 這類不追蹤
+    
+    return 'NO_CHANGE'
+
+def has_external_reference(formula):
+    """
+    🔗 檢查公式是否包含外部參照
+    """
+    if not formula:
+        return False
+    
+    # 檢查常見的外部參照模式
+    external_patterns = [
+        r"'\[.*?\]",           # '[檔案名]工作表'!
+        r"\[.*?\]",            # [檔案名]工作表!
+        r"'.*?\.xlsx?'!",      # '檔案名.xlsx'!
+        r"'.*?\.xls?'!",       # '檔案名.xls'!
+    ]
+    
+    import re
+    for pattern in external_patterns:
+        if re.search(pattern, formula, re.IGNORECASE):
+            return True
+    
+    return False
+
+def print_meaningful_changes(changes, file_info):
+    """
+    📊 顯示有意義的變更
+    """
+    try:
+        term_width = os.get_terminal_size().columns
+    except OSError:
+        term_width = 120
+    
+    print()
+    print("=" * term_width)
+    
+    filename = file_info.get('filename', 'Unknown')
+    worksheet = file_info.get('worksheet', '')
+    caption = f"{filename} [Worksheet: {worksheet}] - 有意義的變更"
+    print(caption)
+    
+    print("=" * term_width)
+    
+    baseline_time = file_info.get('baseline_time', 'N/A')
+    current_time = file_info.get('current_time', 'N/A')
+    
+    print(f"Address      | Change Type          | Baseline ({baseline_time})       | Current ({current_time})")
+    print("-" * term_width)
+    
+    # 變更類型的中文說明
+    change_type_labels = {
+        'FORMULA_CHANGE': '🔧 公式變更',
+        'DIRECT_VALUE_CHANGE': '✏️ 直接輸入',
+        'EXTERNAL_REF_UPDATE': '🔗 外部參照更新',
+        'CELL_ADDED': '➕ 新增儲存格',
+        'CELL_DELETED': '➖ 刪除儲存格'
+    }
+    
+    for change in changes:
+        addr = change['address']
+        change_type = change['change_type']
+        old_val = change['old_value']
+        new_val = change['new_value']
+        old_formula = change['old_formula']
+        new_formula = change['new_formula']
+        
+        type_label = change_type_labels.get(change_type, change_type)
+        
+        if change_type == 'FORMULA_CHANGE':
+            old_display = f"[公式] {old_formula}"
+            new_display = f"[公式] {new_formula}"
+        elif change_type == 'EXTERNAL_REF_UPDATE':
+            old_display = f"[外部] {old_val} ({old_formula})"
+            new_display = f"[外部] {new_val} ({new_formula})"
+        elif change_type == 'CELL_ADDED':
+            old_display = "(Empty)"
+            new_display = f"[ADD] {new_formula or new_val}"
+        elif change_type == 'CELL_DELETED':
+            old_display = f"{old_formula or old_val}"
+            new_display = "[DEL] (Deleted)"
+        else:
+            old_display = str(old_val)
+            new_display = str(new_val)
+        
+        print(f"{addr:<12} | {type_label:<20} | {old_display:<30} | {new_display}")
+    
+    print("=" * term_width)
+    print()
+
+def log_meaningful_changes_to_csv(file_path, worksheet_name, changes, baseline_data):
+    """
+    📝 記錄有意義的變更到 CSV
+    """
+    try:
+        os.makedirs(os.path.dirname(settings.CSV_LOG_FILE), exist_ok=True)
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        file_exists = os.path.exists(settings.CSV_LOG_FILE)
+        
+        with gzip.open(settings.CSV_LOG_FILE, 'at', encoding='utf-8', newline='') as f:
+            writer = csv.writer(f)
+            
+            if not file_exists:
+                writer.writerow([
+                    'Timestamp', 'Filename', 'Worksheet', 'Cell', 
+                    'Change_Type', 'Old_Value', 'New_Value', 'Old_Formula', 'New_Formula', 'Last_Author'
+                ])
+            
+            for change in changes:
+                writer.writerow([
+                    timestamp,
+                    os.path.basename(file_path),
+                    worksheet_name,
+                    change['address'],
+                    change['change_type'],
+                    change['old_value'],
+                    change['new_value'],
+                    change['old_formula'],
+                    change['new_formula'],
+                    baseline_data.get('last_author', 'Unknown')
+                ])
+        
+        print(f"📝 有意義變更已記錄到 CSV")
+        
+    except Exception:
+        pass
+
+def update_baseline_after_meaningful_changes(file_path, base_name, current_data):
+    """
+    🔄 更新基準線
+    """
+    try:
+        from core.excel_parser import get_excel_last_author
+        current_author = get_excel_last_author(file_path)
+    except:
+        current_author = 'Unknown'
+    
+    # 更新基準線
+    updated_baseline = {
+        "last_author": current_author,
+        "content_hash": f"updated_{int(time.time())}",
+        "cells": current_data,
+        "timestamp": datetime.now().isoformat()
+    }
+    
+    # 保存更新的基準線
+    from core.baseline import save_baseline
+    if save_baseline(base_name, updated_baseline):
+        pass  # 成功更新
+    else:
+        print(f"[WARNING] 基準線更新失敗: {base_name}")
+
+
+
+
+
 
 def log_changes_to_csv(file_path, worksheet_name, old_data, new_data, baseline_data):
     """

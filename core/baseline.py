@@ -1,5 +1,5 @@
 """
-基準線管理功能
+基準線管理功能 - 支援 LZ4、Zstd 和 gzip 壓縮
 """
 import os
 import json
@@ -8,141 +8,157 @@ import shutil
 import time
 import gc
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 import config.settings as settings
 from utils.helpers import save_progress, load_progress
 from utils.memory import check_memory_limit, get_memory_usage
+from utils.compression import (
+    CompressionFormat, 
+    save_compressed_file, 
+    load_compressed_file,
+    get_compression_stats,
+    migrate_baseline_format
+)
 from core.excel_parser import dump_excel_cells_with_timeout, hash_excel_content, get_excel_last_author
 
 def baseline_file_path(base_name):
     """
-    獲取基準線檔案路徑
+    獲取基準線檔案路徑（不包含副檔名）
     """
-    return os.path.join(settings.LOG_FOLDER, f"{base_name}.baseline.json.gz")
+    return os.path.join(settings.LOG_FOLDER, f"{base_name}.baseline.json")
 
-def load_baseline(baseline_file):
+def get_baseline_file_with_extension(base_name):
     """
-    載入基準線檔案，確保文件句柄被正確釋放
+    獲取實際存在的基準線檔案路徑（包含副檔名）
+    """
+    base_path = baseline_file_path(base_name)
+    
+    # 按優先順序檢查不同格式的檔案
+    for format_type in [settings.DEFAULT_COMPRESSION_FORMAT, 'lz4', 'zstd', 'gzip']:
+        ext = CompressionFormat.get_extension(format_type)
+        test_path = base_path + ext
+        if os.path.exists(test_path):
+            return test_path
+    
+    return None
+
+def load_baseline(baseline_file_or_base_name):
+    """
+    載入基準線檔案，支援多種壓縮格式
     """
     try:
-        if not os.path.exists(baseline_file):
-            return None
-            
-        # 加入文件鎖檢查
-        try:
-            with open(baseline_file, 'r+b') as test_file:
-                pass  # 只是測試是否可以存取
-        except (PermissionError, OSError) as e:
-            print(f"[WARN] Baseline 文件被鎖定: {baseline_file} - {e}")
-            return None
-            
-        # 使用 with 語句確保文件被正確關閉
-        with gzip.open(baseline_file, 'rt', encoding='utf-8') as f:
-            data = json.load(f)
-            
-        # 強制等待文件系統釋放句柄
-        time.sleep(0.1)
+        # 如果是基準名稱，轉換為檔案路徑
+        if not os.path.sep in baseline_file_or_base_name and not baseline_file_or_base_name.endswith('.json'):
+            base_path = baseline_file_path(baseline_file_or_base_name)
+        else:
+            base_path = baseline_file_or_base_name
+            if base_path.endswith('.gz') or base_path.endswith('.lz4') or base_path.endswith('.zst'):
+                base_path = base_path.rsplit('.', 1)[0]
+        
+        # 使用壓縮工具載入
+        from utils.compression import load_compressed_file
+        data = load_compressed_file(base_path)
+        
+        # 移除所有 [DEBUG] 載入基準線的訊息
         
         return data
         
     except Exception as e:
-        print(f"[ERROR][load_baseline] {baseline_file}: {e}")
+        print(f"[ERROR] 載入基準線失敗 {baseline_file_or_base_name}: {e}")
         return None
 
-def save_baseline(baseline_file, data):
+def save_baseline(baseline_file_or_base_name, data):
     """
-    保存基準線檔案，強化版本確保文件句柄被正確釋放
+    保存基準線檔案，使用設定的壓縮格式
     """
-    dir_name = os.path.dirname(baseline_file)
-    os.makedirs(dir_name, exist_ok=True)
+    # 移除這些行：
+    # print(f"[DEBUG] save_baseline 開始執行")
+    # print(f"[DEBUG] 輸入檔案: {baseline_file_or_base_name}")
+    # print(f"[DEBUG] 預設格式: {settings.DEFAULT_COMPRESSION_FORMAT}")
+    # print(f"[DEBUG] 呼叫堆疊:", end="")
+    # 移除 traceback 相關代碼
     
-    max_retries = 5
-    base_delay = 0.2
+    try:
+        # 如果是基準名稱，轉換為檔案路徑
+        if not os.path.sep in baseline_file_or_base_name and not baseline_file_or_base_name.endswith('.json'):
+            base_path = baseline_file_path(baseline_file_or_base_name)
+        else:
+            base_path = baseline_file_or_base_name
+            if base_path.endswith('.gz') or base_path.endswith('.lz4') or base_path.endswith('.zst'):
+                base_path = base_path.rsplit('.', 1)[0]
+        
+        # 移除： print(f"[DEBUG] 基準路徑: {base_path}")
+        
+        # 確保目錄存在
+        dir_name = os.path.dirname(base_path)
+        os.makedirs(dir_name, exist_ok=True)
+        
+        # 使用新的壓縮工具
+        from utils.compression import save_compressed_file, get_compression_stats, CompressionFormat
+        
+        # 選擇壓縮格式
+        compression_format = settings.DEFAULT_COMPRESSION_FORMAT
+        # 移除： print(f"[DEBUG] 使用格式: {compression_format}")
+        
+        # 檢查是否需要清理舊格式的檔案
+        for old_format in ['gzip', 'lz4', 'zstd']:
+            if old_format != compression_format:
+                old_ext = CompressionFormat.get_extension(old_format)
+                old_file = base_path + old_ext
+                if os.path.exists(old_file):
+                    try:
+                        os.remove(old_file)
+                        # 移除： print(f"[DEBUG] 清理舊格式檔案: {os.path.basename(old_file)}")
+                    except Exception as e:
+                        print(f"[ERROR] 清理舊檔案失敗: {e}")
+        
+        # 保存新檔案
+        # 移除： print(f"[DEBUG] 開始保存壓縮檔案...")
+        actual_file = save_compressed_file(base_path, data, compression_format)
+        # 移除： print(f"[DEBUG] 保存完成: {actual_file}")
+        
+        # 簡化壓縮統計顯示
+        if settings.SHOW_COMPRESSION_STATS:
+            stats = get_compression_stats(actual_file)
+            if stats:
+                print(f"基準線保存: {os.path.basename(actual_file)} ({stats['format'].upper()}, {stats['compression_ratio']:.1f}%)")
+        
+        return True
+        
+    except Exception as e:
+        print(f"[ERROR] 保存基準線失敗 {baseline_file_or_base_name}: {e}")
+        return False
+
+def archive_old_baselines():
+    """
+    歸檔舊的基準線檔案，轉換為高壓縮率格式
+    """
+    if not settings.ENABLE_ARCHIVE_MODE:
+        return
     
-    for attempt in range(max_retries):
-        temp_file = None
-        try:
-            # 使用唯一的臨時文件名
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
-            temp_file = os.path.join(dir_name, f"baseline_temp_{timestamp}_{attempt}.tmp")
+    try:
+        archive_threshold = datetime.now() - timedelta(days=settings.ARCHIVE_AFTER_DAYS)
+        archive_count = 0
+        
+        for filename in os.listdir(settings.LOG_FOLDER):
+            if not filename.endswith('.baseline.json.lz4'):
+                continue
             
-            # 加入時間戳記到 baseline 數據中
-            data_with_timestamp = data.copy()
-            data_with_timestamp['timestamp'] = datetime.now().isoformat()
+            filepath = os.path.join(settings.LOG_FOLDER, filename)
+            file_mtime = datetime.fromtimestamp(os.path.getmtime(filepath))
             
-            # 寫入臨時文件，確保文件句柄被釋放
-            with gzip.open(temp_file, 'wt', encoding='utf-8') as f:
-                json.dump(data_with_timestamp, f, ensure_ascii=False, separators=(',', ':'))
-            
-            # 強制刷新文件系統
-            time.sleep(0.1)
-            
-            # 驗證臨時文件完整性
-            with gzip.open(temp_file, 'rt', encoding='utf-8') as f:
-                json.load(f)
-            
-            # 強制等待文件系統釋放句柄
-            time.sleep(0.1)
-            
-            # 如果目標文件存在，先備份再刪除
-            backup_file = None
-            if os.path.exists(baseline_file):
-                backup_file = f"{baseline_file}.backup_{timestamp}"
-                try:
-                    shutil.copy2(baseline_file, backup_file)
-                    os.remove(baseline_file)
-                    time.sleep(0.1)  # 等待文件系統釋放
-                except Exception as e:
-                    print(f"[WARN] 無法處理舊 baseline 文件: {e}")
-                    if backup_file and os.path.exists(backup_file):
-                        os.remove(backup_file)
-                    raise
-            
-            # 移動臨時文件到目標位置
-            shutil.move(temp_file, baseline_file)
-            
-            # 清理備份文件
-            if backup_file and os.path.exists(backup_file):
-                os.remove(backup_file)
-            
-            # 強制釋放所有文件句柄
-            gc.collect()
-            time.sleep(0.1)
-            
-            print(f"[DEBUG] Baseline 保存成功: {os.path.basename(baseline_file)} (嘗試 {attempt + 1}/{max_retries})")
-            return True
-            
-        except Exception as e:
-            print(f"[WARN] Baseline 保存失敗 (嘗試 {attempt + 1}/{max_retries}): {e}")
-            
-            # 清理所有臨時文件
-            if temp_file and os.path.exists(temp_file):
-                try:
-                    os.remove(temp_file)
-                except Exception:
-                    pass
-            
-            # 清理可能的備份文件
-            if 'backup_file' in locals() and backup_file and os.path.exists(backup_file):
-                try:
-                    if os.path.exists(baseline_file):
-                        os.remove(baseline_file)
-                    shutil.move(backup_file, baseline_file)
-                except Exception:
-                    pass
-            
-            # 強制垃圾回收和等待
-            gc.collect()
-            
-            if attempt < max_retries - 1:
-                delay = base_delay * (2 ** attempt)  # 指數退避
-                print(f"[INFO] 等待 {delay} 秒後重試...")
-                time.sleep(delay)
-            else:
-                print(f"[ERROR] 所有嘗試都失敗，無法保存 baseline: {baseline_file}")
-                return False
+            if file_mtime < archive_threshold:
+                print(f"[ARCHIVE] 歸檔舊基準線: {filename}")
+                new_filepath = migrate_baseline_format(filepath, settings.ARCHIVE_COMPRESSION_FORMAT)
+                if new_filepath:
+                    archive_count += 1
+                    print(f"[ARCHIVE] 完成: {os.path.basename(new_filepath)}")
+        
+        if archive_count > 0:
+            print(f"[ARCHIVE] 共歸檔了 {archive_count} 個基準線檔案")
     
-    return False
+    except Exception as e:
+        print(f"[ERROR] 歸檔過程出錯: {e}")
 
 def create_baseline_for_files_robust(xlsx_files, skip_force_baseline=True):
     """
@@ -155,6 +171,15 @@ def create_baseline_for_files_robust(xlsx_files, skip_force_baseline=True):
         return
     
     print("\n" + "="*90 + "\n" + " BASELINE 建立程序 ".center(90, "=") + "\n" + "="*90)
+    
+    # 檢查壓縮格式可用性
+    available_formats = CompressionFormat.get_available_formats()
+    print(f"🗜️  可用壓縮格式: {', '.join(available_formats)}")
+    print(f"🚀 使用壓縮格式: {settings.DEFAULT_COMPRESSION_FORMAT.upper()}")
+    
+    if settings.DEFAULT_COMPRESSION_FORMAT not in available_formats:
+        print(f"⚠️  警告: 預設格式 {settings.DEFAULT_COMPRESSION_FORMAT} 不可用，降級到 gzip")
+        settings.DEFAULT_COMPRESSION_FORMAT = 'gzip'
     
     progress = load_progress()
     start_index = 0
@@ -189,6 +214,8 @@ def create_baseline_for_files_robust(xlsx_files, skip_force_baseline=True):
     
     success_count, skip_count, error_count = 0, 0, 0
     start_time = time.time()
+    total_original_size = 0
+    total_compressed_size = 0
     
     for i in range(start_index, total):
         if settings.force_stop:
@@ -212,8 +239,7 @@ def create_baseline_for_files_robust(xlsx_files, skip_force_baseline=True):
         
         cell_data = None
         try:
-            baseline_file = baseline_file_path(base_name)
-            old_baseline = load_baseline(baseline_file)
+            old_baseline = load_baseline(base_name)
             old_hash = old_baseline['content_hash'] if old_baseline and 'content_hash' in old_baseline else None
             
             cell_data = dump_excel_cells_with_timeout(file_path)
@@ -231,10 +257,24 @@ def create_baseline_for_files_robust(xlsx_files, skip_force_baseline=True):
                     skip_count += 1
                 else:
                     curr_author = get_excel_last_author(file_path)
-                    if save_baseline(baseline_file, {"last_author": curr_author, "content_hash": curr_hash, "cells": cell_data}):
+                    baseline_data = {
+                        "last_author": curr_author, 
+                        "content_hash": curr_hash, 
+                        "cells": cell_data
+                    }
+                    
+                    if save_baseline(base_name, baseline_data):
                         print(f"  結果: [OK]")
-                        print(f"  Baseline: {os.path.basename(baseline_file)}")
                         success_count += 1
+                        
+                        # 統計壓縮效果
+                        if settings.SHOW_COMPRESSION_STATS:
+                            actual_file = get_baseline_file_with_extension(base_name)
+                            if actual_file:
+                                stats = get_compression_stats(actual_file)
+                                if stats and stats['original_size']:
+                                    total_original_size += stats['original_size']
+                                    total_compressed_size += stats['compressed_size']
                     else:
                         print(f"  結果: [SAVE_ERROR]")
                         error_count += 1
@@ -253,9 +293,22 @@ def create_baseline_for_files_robust(xlsx_files, skip_force_baseline=True):
                 del old_baseline
             gc.collect()
 
+    # 執行歸檔
+    if settings.ENABLE_ARCHIVE_MODE:
+        print("\n🗂️  檢查歸檔...")
+        archive_old_baselines()
+
     settings.baseline_completed = True
     print("-" * 90 + f"\n🎯 BASELINE 建立完成! (總耗時: {time.time() - start_time:.2f} 秒)")
     print(f"✅ 成功: {success_count}, ⏭️  跳過: {skip_count}, ❌ 失敗: {error_count}")
+    
+    # 顯示壓縮統計
+    if settings.SHOW_COMPRESSION_STATS and total_original_size > 0:
+        overall_ratio = (1 - total_compressed_size / total_original_size) * 100
+        savings_mb = (total_original_size - total_compressed_size) / (1024 * 1024)
+        print(f"🗜️  總壓縮統計: 原始 {total_original_size/(1024*1024):.1f}MB → "
+              f"壓縮 {total_compressed_size/(1024*1024):.1f}MB "
+              f"(節省 {savings_mb:.1f}MB, 壓縮率 {overall_ratio:.1f}%)")
     
     if settings.ENABLE_RESUME and os.path.exists(settings.RESUME_LOG_FILE):
         try: 
