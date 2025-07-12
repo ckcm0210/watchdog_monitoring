@@ -18,6 +18,7 @@ import config.settings as settings
 from utils.logging import init_logging
 from utils.memory import check_memory_limit
 from utils.helpers import get_all_excel_files, timeout_handler
+from utils.compression import CompressionFormat, test_compression_support  # 新增
 from ui.console import init_console
 from core.baseline import create_baseline_for_files_robust
 from core.watcher import active_polling_handler, ExcelFileEventHandler
@@ -43,7 +44,10 @@ def main():
     """
     主函數
     """
-    print("🚀 Excel Monitor v2.0 啟動中...")
+    print("🚀 Excel Monitor v2.1 啟動中...")
+    
+    # 測試壓縮支援
+    test_compression_support()
     
     # 初始化日誌系統
     init_logging()
@@ -58,6 +62,14 @@ def main():
     if settings.ENABLE_TIMEOUT:
         timeout_thread = threading.Thread(target=timeout_handler, daemon=True)
         timeout_thread.start()
+    
+    # 檢查壓縮格式支援
+    available_formats = CompressionFormat.get_available_formats()
+    print(f"🗜️  支援壓縮格式: {', '.join(available_formats)}")
+    validated_format = CompressionFormat.validate_format(settings.DEFAULT_COMPRESSION_FORMAT)
+    if validated_format != settings.DEFAULT_COMPRESSION_FORMAT:
+        print(f"⚠️  格式已調整: {settings.DEFAULT_COMPRESSION_FORMAT} → {validated_format}")
+        settings.DEFAULT_COMPRESSION_FORMAT = validated_format
     
     print(f"📁 監控資料夾: {settings.WATCH_FOLDERS}")
     print(f"📊 支援格式: {settings.SUPPORTED_EXTS}")
@@ -110,6 +122,8 @@ def main():
     print(f"   - 本地緩存: {'開啟' if settings.USE_LOCAL_CACHE else '關閉'}")
     print(f"   - 黑色控制台: {'開啟' if settings.ENABLE_BLACK_CONSOLE else '關閉'}")
     print(f"   - 記憶體監控: {'開啟' if settings.ENABLE_MEMORY_MONITOR else '關閉'}")
+    print(f"   - 壓縮格式: {settings.DEFAULT_COMPRESSION_FORMAT.upper()}")
+    print(f"   - 歸檔模式: {'開啟' if settings.ENABLE_ARCHIVE_MODE else '關閉'}")
     print("\n按 Ctrl+C 停止監控...")
     
     try:
