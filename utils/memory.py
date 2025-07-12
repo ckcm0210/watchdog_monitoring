@@ -5,6 +5,10 @@ import psutil
 import os
 import gc
 import config.settings as settings
+from utils.logging import get_logger
+
+# 獲取日誌器
+logger = get_logger(__name__)
 
 def get_memory_usage():
     """
@@ -12,7 +16,17 @@ def get_memory_usage():
     """
     try:
         return psutil.Process(os.getpid()).memory_info().rss / 1024 / 1024
-    except Exception:
+    except psutil.NoSuchProcess:
+        logger.error("無法獲取記憶體使用量：進程不存在")
+        return 0
+    except psutil.AccessDenied:
+        logger.warning("無法獲取記憶體使用量：權限被拒絕")
+        return 0
+    except OSError as e:
+        logger.error(f"獲取記憶體使用量時發生系統錯誤：{e}")
+        return 0
+    except Exception as e:
+        logger.error(f"獲取記憶體使用量時發生未預期錯誤：{type(e).__name__}: {e}")
         return 0
 
 def check_memory_limit():

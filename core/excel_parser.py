@@ -11,8 +11,13 @@ import hashlib
 from datetime import datetime
 from openpyxl import load_workbook
 from openpyxl.worksheet.formula import ArrayFormula
+from openpyxl.utils.exceptions import InvalidFileException
 import config.settings as settings
 from utils.cache import copy_to_cache
+from utils.logging import get_logger
+
+# 獲取日誌器
+logger = get_logger(__name__)
 
 def extract_external_refs(xlsx_path):
     """
@@ -37,10 +42,20 @@ def extract_external_refs(xlsx_path):
                             else:
                                 path = ''
                             ref_map[num] = path
-                        except Exception:
+                        except (KeyError, ET.ParseError) as e:
+                            logger.debug(f"無法解析外部連結 {target}：{e}")
                             ref_map[num] = ''
-    except Exception:
-        pass
+                        except Exception as e:
+                            logger.warning(f"處理外部連結 {target} 時發生未預期錯誤：{type(e).__name__}: {e}")
+                            ref_map[num] = ''
+    except FileNotFoundError:
+        logger.error(f"Excel 檔案不存在：{xlsx_path}")
+    except zipfile.BadZipFile:
+        logger.error(f"Excel 檔案損壞或不是有效的 ZIP 格式：{xlsx_path}")
+    except PermissionError:
+        logger.warning(f"無權限讀取 Excel 檔案：{xlsx_path}")
+    except Exception as e:
+        logger.error(f"解析 Excel 外部參照時發生未預期錯誤 {xlsx_path}：{type(e).__name__}: {e}")
     return ref_map
 
 def pretty_formula(formula, ref_map=None):
@@ -103,7 +118,20 @@ def get_excel_last_author(path):
         wb.close()
         del wb
         return author
-    except Exception: 
+    except FileNotFoundError:
+        logger.error(f"Excel 檔案不存在：{path}")
+        return None
+    except PermissionError:
+        logger.warning(f"無權限讀取 Excel 檔案：{path}")
+        return None
+    except InvalidFileException:
+        logger.error(f"無效的 Excel 檔案格式：{path}")
+        return None
+    except zipfile.BadZipFile:
+        logger.error(f"Excel 檔案損壞或不是有效的 ZIP 格式：{path}")
+        return None
+    except Exception as e:
+        logger.error(f"讀取 Excel 檔案 {path} 最後修改者時發生未預期錯誤：{type(e).__name__}: {e}")
         return None
 
 def safe_load_workbook(path, max_retry=5, delay=0.5, **kwargs):
@@ -116,11 +144,27 @@ def safe_load_workbook(path, max_retry=5, delay=0.5, **kwargs):
             wb = load_workbook(path, **kwargs)
             return wb
         except PermissionError as e:
+            logger.warning(f"載入 Excel 檔案權限被拒絕，重試 {i+1}/{max_retry}：{path}")
             last_err = e
             time.sleep(delay)
-        except Exception as e:
+        except FileNotFoundError as e:
+            logger.error(f"Excel 檔案不存在：{path}")
             last_err = e
             break
+        except InvalidFileException as e:
+            logger.error(f"無效的 Excel 檔案格式：{path}")
+            last_err = e
+            break
+        except zipfile.BadZipFile as e:
+            logger.error(f"Excel 檔案損壞：{path}")
+            last_err = e
+            break
+        except Exception as e:
+            logger.error(f"載入 Excel 檔案時發生未預期錯誤：{path} - {type(e).__name__}: {e}")
+            last_err = e
+            break
+    
+    logger.error(f"無法載入 Excel 檔案 {path}，已重試 {max_retry} 次")
     raise last_err
 
 def dump_excel_cells_with_timeout(path, show_sheet_detail=True, silent=False):
@@ -179,9 +223,30 @@ def dump_excel_cells_with_timeout(path, show_sheet_detail=True, silent=False):
         
         return result
         
-    except Exception as e:
+    except FileNotFoundError:
+        logger.error(f"Excel 檔案不存在：{path}")
         if not silent: 
-            print(f"   ❌ Excel 讀取失敗: {e}")
+            print(f"   ❌ Excel 讀取失敗：檔案不存在")
+        return None
+    except PermissionError:
+        logger.warning(f"無權限讀取 Excel 檔案：{path}")
+        if not silent: 
+            print(f"   ❌ Excel 讀取失敗：權限被拒絕")
+        return None
+    except InvalidFileException:
+        logger.error(f"無效的 Excel 檔案格式：{path}")
+        if not silent: 
+            print(f"   ❌ Excel 讀取失敗：檔案格式無效")
+        return None
+    except zipfile.BadZipFile:
+        logger.error(f"Excel 檔案損壞：{path}")
+        if not silent: 
+            print(f"   ❌ Excel 讀取失敗：檔案損壞")
+        return None
+    except Exception as e:
+        logger.error(f"讀取 Excel 檔案時發生未預期錯誤 {path}：{type(e).__name__}: {e}")
+        if not silent: 
+            print(f"   ❌ Excel 讀取失敗：{type(e).__name__}: {e}")
         return None
     finally:
         if wb: 
@@ -202,5 +267,9 @@ def hash_excel_content(cells_dict):
     try:
         content_str = json.dumps(cells_dict, sort_keys=True, ensure_ascii=False)
         return hashlib.md5(content_str.encode('utf-8')).hexdigest()
-    except Exception: 
+    except (TypeError, UnicodeEncodeError) as e:
+        logger.error(f"計算 Excel 內容雜湊值時發生編碼錯誤：{e}")
+        return None
+    except Exception as e:
+        logger.error(f"計算 Excel 內容雜湊值時發生未預期錯誤：{type(e).__name__}: {e}")
         return None

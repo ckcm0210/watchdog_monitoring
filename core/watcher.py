@@ -7,6 +7,10 @@ import threading
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 import config.settings as settings
+from utils.logging import get_logger
+
+# 獲取日誌器
+logger = get_logger(__name__)
 
 class ActivePollingHandler:
     """
@@ -23,7 +27,17 @@ class ActivePollingHandler:
         """
         try:
             file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
-        except Exception:
+        except FileNotFoundError:
+            logger.warning(f"檔案不存在，無法獲取大小：{file_path}")
+            file_size_mb = 0
+        except PermissionError:
+            logger.warning(f"無權限訪問檔案，無法獲取大小：{file_path}")
+            file_size_mb = 0
+        except OSError as e:
+            logger.error(f"獲取檔案大小時發生系統錯誤：{file_path} - {e}")
+            file_size_mb = 0
+        except Exception as e:
+            logger.error(f"獲取檔案大小時發生未預期錯誤：{file_path} - {type(e).__name__}: {e}")
             file_size_mb = 0
             
         if file_size_mb < settings.POLLING_SIZE_THRESHOLD_MB:
