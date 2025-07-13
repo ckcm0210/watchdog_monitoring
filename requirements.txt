@@ -1,4 +1,6 @@
-watchdog>=2.1.0
-openpyxl>=3.0.0
-psutil>=5.8.0
-wcwidth>=0.2.5
+openpyxl>=3.1.0
+watchdog>=3.0.0
+psutil>=5.9.0
+wcwidth>=0.2.0
+lz4>=4.3.0
+zstandard>=0.22.0
