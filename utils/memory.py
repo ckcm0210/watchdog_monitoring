@@ -4,6 +4,7 @@
 import psutil
 import os
 import gc
+import logging
 import config.settings as settings
 
 def get_memory_usage():
@@ -12,7 +13,14 @@ def get_memory_usage():
     """
     try:
         return psutil.Process(os.getpid()).memory_info().rss / 1024 / 1024
-    except Exception:
+    except psutil.NoSuchProcess as e:
+        logging.error(f"進程不存在，無法獲取內存使用量: {e}")
+        return 0
+    except psutil.AccessDenied as e:
+        logging.warning(f"權限不足，無法獲取內存使用量: {e}")
+        return 0
+    except Exception as e:
+        logging.error(f"獲取內存使用量時發生未知錯誤: {e}", exc_info=True)
         return 0
 
 def check_memory_limit():

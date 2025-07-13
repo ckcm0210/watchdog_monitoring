@@ -7,6 +7,7 @@ import json
 import threading
 from datetime import datetime
 import config.settings as settings
+import logging
 
 def get_file_mtime(filepath):
     """
@@ -14,8 +15,15 @@ def get_file_mtime(filepath):
     """
     try:
         return datetime.fromtimestamp(os.path.getmtime(filepath)).strftime("%Y-%m-%d %H:%M:%S")
-    except Exception:
-        return "Unknown"
+    except FileNotFoundError:
+        logging.warning(f"檔案未找到: {filepath}")
+        return "FileNotFound"
+    except PermissionError:
+        logging.error(f"權限不足，無法存取檔案: {filepath}")
+        return "PermissionDenied"
+    except OSError as e:
+        logging.error(f"存取檔案時發生 I/O 錯誤: {filepath}，錯誤: {e}")
+        return "IOError"
 
 def human_readable_size(num_bytes):
     """
@@ -55,7 +63,8 @@ def is_force_baseline_file(filepath):
             if pattern.lower() in filepath.lower(): 
                 return True
         return False
-    except Exception: 
+    except TypeError as e: # 假設 pattern 或 filepath 可能不是字串
+        logging.error(f"檢查強制基準線檔案時發生類型錯誤: {e}")
         return False
 
 def save_progress(completed_files, total_files):
@@ -77,8 +86,8 @@ def save_progress(completed_files, total_files):
         
         with open(settings.RESUME_LOG_FILE, 'w', encoding='utf-8') as f: 
             json.dump(progress_data, f, ensure_ascii=False, indent=2)
-    except Exception as e: 
-        print(f"[WARN] 無法儲存進度: {e}")
+    except (OSError, json.JSONEncodeError) as e: 
+        logging.error(f"無法儲存進度: {e}")
 
 def load_progress():
     """
@@ -90,8 +99,8 @@ def load_progress():
     try:
         with open(settings.RESUME_LOG_FILE, 'r', encoding='utf-8') as f: 
             return json.load(f)
-    except Exception as e:
-        print(f"[WARN] 無法載入進度: {e}")
+    except (FileNotFoundError, json.JSONDecodeError, OSError) as e:
+        logging.error(f"無法載入進度: {e}")
         return None
 
 def timeout_handler():

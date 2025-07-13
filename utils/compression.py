@@ -6,6 +6,7 @@ import json
 import gzip
 import time
 from datetime import datetime
+import logging
 
 # 導入壓縮庫並增加詳細的錯誤處理
 try:
@@ -136,19 +137,22 @@ def decompress_data(compressed_data, format_type=None):
         # 嘗試 gzip 解壓
         try:
             return gzip.decompress(compressed_data).decode('utf-8')
-        except Exception:
+        except gzip.BadGzipFile as e:
+            logging.error(f"gzip 解壓縮失敗: {e}")
             # 如果 gzip 失敗，嘗試其他格式
             if HAS_LZ4:
                 try:
                     return lz4.frame.decompress(compressed_data).decode('utf-8')
-                except Exception:
+                except lz4.frame.LZ4FrameError as e:
+                    logging.error(f"LZ4 解壓縮失敗: {e}")
                     pass
             
             if HAS_ZSTD:
                 try:
                     decompressor = zstd.ZstdDecompressor()
                     return decompressor.decompress(compressed_data).decode('utf-8')
-                except Exception:
+                except zstd.ZstdError as e:
+                    logging.error(f"Zstandard 解壓縮失敗: {e}")
                     pass
             
             raise ValueError("無法解壓縮數據，未知的壓縮格式")
@@ -240,12 +244,10 @@ def load_compressed_file(filepath):
     try:
         with open(latest_file, 'rb') as f:
             compressed_data = f.read()
-        
         json_data = decompress_data(compressed_data, format_type)
         return json.loads(json_data)
-    
-    except Exception as e:
-        print(f"[ERROR] 載入壓縮檔案失敗 {latest_file}: {e}")  # 保留錯誤訊息
+    except (FileNotFoundError, PermissionError, OSError) as e:
+        logging.error(f"載入壓縮檔案失敗 {latest_file}: {e}")
         return None
 
 
@@ -282,7 +284,8 @@ def get_compression_stats(filepath):
             'savings_bytes': original_size - file_size
         }
     
-    except Exception:
+    except (gzip.BadGzipFile, lz4.frame.LZ4FrameError, zstd.ZstdError, json.JSONDecodeError) as e:
+        logging.error(f"獲取壓縮統計資訊失敗: {filepath}, 錯誤: {e}")
         return {
             'format': format_type,
             'compressed_size': file_size,
@@ -323,7 +326,8 @@ def migrate_baseline_format(old_filepath, new_format):
     # 刪除舊檔案
     try:
         os.remove(old_filepath)
-    except Exception:
+    except OSError as e:
+        logging.error(f"刪除舊檔案失敗: {old_filepath}, 錯誤: {e}")
         pass
     
     return new_filepath
