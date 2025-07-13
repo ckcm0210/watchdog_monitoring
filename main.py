@@ -8,6 +8,7 @@ import signal
 import threading
 import time
 from datetime import datetime
+import logging
 
 # 確保能夠導入模組
 current_dir = os.path.dirname(os.path.abspath(__file__))
