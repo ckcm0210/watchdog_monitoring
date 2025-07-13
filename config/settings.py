@@ -19,6 +19,7 @@ SHOW_COMPRESSION_STATS = False          # 關閉壓縮統計顯示
 SHOW_DEBUG_MESSAGES = False             # 關閉調試訊息
 AUTO_UPDATE_BASELINE_AFTER_COMPARE = True  # 比較後自動更新基準線
 SCAN_ALL_MODE = True
+MAX_CHANGES_TO_DISPLAY = 20 # 限制顯示的變更數量，0 表示不限制
 USE_LOCAL_CACHE = True
 CACHE_FOLDER = r"C:\Users\user\Desktop\watchdog\cache_folder"
 ENABLE_FAST_MODE = True
