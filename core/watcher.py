@@ -7,6 +7,7 @@ import threading
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 import config.settings as settings
+import logging
 
 class ActivePollingHandler:
     """
@@ -23,7 +24,8 @@ class ActivePollingHandler:
         """
         try:
             file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
-        except Exception:
+        except (FileNotFoundError, PermissionError, OSError) as e:
+            logging.warning(f"獲取檔案大小失敗: {file_path}, 錯誤: {e}")
             file_size_mb = 0
             
         if file_size_mb < settings.POLLING_SIZE_THRESHOLD_MB:

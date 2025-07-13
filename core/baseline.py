@@ -9,6 +9,7 @@ import time
 import gc
 import threading
 from datetime import datetime, timedelta
+import logging
 import config.settings as settings
 from utils.helpers import save_progress, load_progress
 from utils.memory import check_memory_limit, get_memory_usage
@@ -63,21 +64,14 @@ def load_baseline(baseline_file_or_base_name):
         
         return data
         
-    except Exception as e:
-        print(f"[ERROR] 載入基準線失敗 {baseline_file_or_base_name}: {e}")
+    except (FileNotFoundError, PermissionError, OSError, json.JSONDecodeError, gzip.BadGzipFile) as e:
+        logging.error(f"載入基準線失敗 {baseline_file_or_base_name}: {e}")
         return None
 
 def save_baseline(baseline_file_or_base_name, data):
     """
     保存基準線檔案，使用設定的壓縮格式
     """
-    # 移除這些行：
-    # print(f"[DEBUG] save_baseline 開始執行")
-    # print(f"[DEBUG] 輸入檔案: {baseline_file_or_base_name}")
-    # print(f"[DEBUG] 預設格式: {settings.DEFAULT_COMPRESSION_FORMAT}")
-    # print(f"[DEBUG] 呼叫堆疊:", end="")
-    # 移除 traceback 相關代碼
-    
     try:
         # 如果是基準名稱，轉換為檔案路徑
         if not os.path.sep in baseline_file_or_base_name and not baseline_file_or_base_name.endswith('.json'):
@@ -108,9 +102,8 @@ def save_baseline(baseline_file_or_base_name, data):
                 if os.path.exists(old_file):
                     try:
                         os.remove(old_file)
-                        # 移除： print(f"[DEBUG] 清理舊格式檔案: {os.path.basename(old_file)}")
-                    except Exception as e:
-                        print(f"[ERROR] 清理舊檔案失敗: {e}")
+                    except OSError as e:
+                        logging.warning(f"清理舊檔案失敗: {e}")
         
         # 保存新檔案
         # 移除： print(f"[DEBUG] 開始保存壓縮檔案...")
@@ -125,8 +118,8 @@ def save_baseline(baseline_file_or_base_name, data):
         
         return True
         
-    except Exception as e:
-        print(f"[ERROR] 保存基準線失敗 {baseline_file_or_base_name}: {e}")
+    except (FileNotFoundError, PermissionError, OSError) as e:
+        logging.error(f"保存基準線檔案失敗: {e}")
         return False
 
 def archive_old_baselines():
@@ -157,8 +150,8 @@ def archive_old_baselines():
         if archive_count > 0:
             print(f"[ARCHIVE] 共歸檔了 {archive_count} 個基準線檔案")
     
-    except Exception as e:
-        print(f"[ERROR] 歸檔過程出錯: {e}")
+    except (OSError, shutil.Error) as e:
+        logging.error(f"歸檔過程出錯: {e}")
 
 def create_baseline_for_files_robust(xlsx_files, skip_force_baseline=True):
     """
@@ -282,8 +275,8 @@ def create_baseline_for_files_robust(xlsx_files, skip_force_baseline=True):
             print(f"  耗時: {time.time() - file_start_time:.2f} 秒\n")
             save_progress(i + 1, total)
             
-        except Exception as e:
-            print(f"  結果: [UNEXPECTED_ERROR]\n  錯誤: {e}\n  耗時: {time.time() - file_start_time:.2f} 秒\n")
+        except (FileNotFoundError, PermissionError, OSError, json.JSONDecodeError) as e:
+            logging.error(f"  結果: [UNEXPECTED_ERROR]\n  錯誤: {e}\n  耗時: {time.time() - file_start_time:.2f} 秒\n")
             error_count += 1
             save_progress(i + 1, total)
         finally:
@@ -314,7 +307,7 @@ def create_baseline_for_files_robust(xlsx_files, skip_force_baseline=True):
         try: 
             os.remove(settings.RESUME_LOG_FILE)
             print(f"🧹 清理進度檔案")
-        except Exception: 
-            pass
+        except OSError as e:
+            logging.error(f"清理進度檔案失敗: {e}")
     
     print("\n" + "=" * 90 + "\n")

@@ -13,6 +13,7 @@ from openpyxl import load_workbook
 from openpyxl.worksheet.formula import ArrayFormula
 import config.settings as settings
 from utils.cache import copy_to_cache
+import logging
 
 def extract_external_refs(xlsx_path):
     """
@@ -37,10 +38,11 @@ def extract_external_refs(xlsx_path):
                             else:
                                 path = ''
                             ref_map[num] = path
-                        except Exception:
+                        except (zipfile.BadZipFile, KeyError, ET.ParseError) as e:
+                            logging.error(f"解析外部連結XML失敗: {target}, 錯誤: {e}")
                             ref_map[num] = ''
-    except Exception:
-        pass
+    except (zipfile.BadZipFile, KeyError, ET.ParseError) as e:
+        logging.error(f"提取外部參照時發生錯誤: {xlsx_path}, 錯誤: {e}")
     return ref_map
 
 def pretty_formula(formula, ref_map=None):
@@ -94,16 +96,20 @@ def serialize_cell_value(value):
     return str(value)
 
 def get_excel_last_author(path):
-    """
-    獲取 Excel 檔案最後修改者
-    """
     try:
         wb = load_workbook(path, read_only=True)
         author = wb.properties.lastModifiedBy
         wb.close()
         del wb
         return author
-    except Exception: 
+    except FileNotFoundError:
+        logging.warning(f"檔案未找到: {path}")
+        return None
+    except PermissionError:
+        logging.error(f"權限不足: {path}")
+        return None
+    except OSError as e:
+        logging.error(f"Excel 檔案讀取 I/O 錯誤: {path}, {e}")
         return None
 
 def safe_load_workbook(path, max_retry=5, delay=0.5, **kwargs):
@@ -120,12 +126,13 @@ def safe_load_workbook(path, max_retry=5, delay=0.5, **kwargs):
             time.sleep(delay)
         except Exception as e:
             last_err = e
+            logging.error(f"載入 Excel 檔案時發生意外錯誤: {path}, 錯誤: {e}")
             break
     raise last_err
 
 def dump_excel_cells_with_timeout(path, show_sheet_detail=True, silent=False):
     """
-    提取 Excel 檔案中的所有儲存格數據
+    提取 Excel 檔案中的所有儲存格數據（含公式）
     """
     # 更新全局變數
     settings.current_processing_file = path
@@ -157,9 +164,13 @@ def dump_excel_cells_with_timeout(path, show_sheet_detail=True, silent=False):
             ws_data = {}
             
             if ws.max_row > 1 or ws.max_column > 1:
-                for row in ws.iter_rows():
+                for row in ws.iter_rows(values_only=False):  # ⚡️ 保證每個 cell 都係 cell object
                     for cell in row:
-                        fstr = get_cell_formula(cell)
+                        # ⚡️ Patch: formula 直接存 cell.formula if present, fallback get_cell_formula
+                        if hasattr(cell, 'formula') and cell.formula:
+                            fstr = cell.formula
+                        else:
+                            fstr = get_cell_formula(cell)
                         vstr = serialize_cell_value(cell.value)
                         if fstr is not None or vstr is not None:
                             ws_data[cell.coordinate] = {"formula": fstr, "value": vstr}
@@ -181,7 +192,7 @@ def dump_excel_cells_with_timeout(path, show_sheet_detail=True, silent=False):
         
     except Exception as e:
         if not silent: 
-            print(f"   ❌ Excel 讀取失敗: {e}")
+            logging.error(f"Excel 讀取失敗: {e}")
         return None
     finally:
         if wb: 
@@ -202,5 +213,6 @@ def hash_excel_content(cells_dict):
     try:
         content_str = json.dumps(cells_dict, sort_keys=True, ensure_ascii=False)
         return hashlib.md5(content_str.encode('utf-8')).hexdigest()
-    except Exception: 
+    except (TypeError, json.JSONEncodeError) as e:
+        logging.error(f"計算 Excel 內容雜湊值失敗: {e}")
         return None
