@@ -7,6 +7,7 @@ import queue
 import threading
 import time
 import config.settings as settings
+import logging
 
 class BlackConsoleWindow:
     def __init__(self):
@@ -108,8 +109,8 @@ class BlackConsoleWindow:
                 self.schedule_disable_topmost(5000)
                 
             except Exception as e:
-                print(f"彈出視窗失敗: {e}")  # 這個保留，因為是錯誤訊息
-        
+                logging.error(f"彈出視窗失敗: {e}")
+                    
     def check_messages(self):
         """檢查並顯示新訊息"""
         try:
