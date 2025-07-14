@@ -58,17 +58,14 @@ def print_aligned_console_diff(old_data, new_data, file_info=None, max_display_c
         return str(line) + ' ' * padding if padding > 0 else str(line)
 
     def format_cell(cell_value):
-        # cell_value 期望為 dict or None
         if cell_value is None or cell_value == {}:
             return "(Empty)"
-        # 若為 dict 兼有 formula 優先顯示
         if isinstance(cell_value, dict):
             formula = cell_value.get("formula")
             if formula:
                 return f"={formula}"
             if "value" in cell_value:
                 return repr(cell_value["value"])
-        # 若舊資料只係 value
         return repr(cell_value)
     
     print()
@@ -81,12 +78,16 @@ def print_aligned_console_diff(old_data, new_data, file_info=None, max_display_c
             print(cap_line)
     print("=" * term_width)
 
-    baseline_time = file_info.get('baseline_time', 'N/A') if file_info else 'N/A'
-    current_time = file_info.get('current_time', 'N/A') if file_info else 'N/A'
+    # [修復 2] 提取作者資訊
+    baseline_time = file_info.get('baseline_time', 'N/A')
+    current_time = file_info.get('current_time', 'N/A')
+    old_author = file_info.get('old_author', 'N/A')
+    new_author = file_info.get('new_author', 'N/A')
 
     header_addr = pad_line("Address", address_col_width)
-    header_base = pad_line(f"Baseline ({baseline_time})", baseline_col_width)
-    header_curr = pad_line(f"Current ({current_time})", current_col_width)
+    # [修復 2] 將作者資訊加入標題
+    header_base = pad_line(f"Baseline ({baseline_time} by {old_author})", baseline_col_width)
+    header_curr = pad_line(f"Current ({current_time} by {new_author})", current_col_width)
     print(f"{header_addr} | {header_base} | {header_curr}")
     print("-" * term_width)
 
@@ -103,12 +104,13 @@ def print_aligned_console_diff(old_data, new_data, file_info=None, max_display_c
             old_val = old_data.get(key)
             new_val = new_data.get(key)
 
-            # 用 format_cell 正確顯示 value/formula
             if old_val is not None and new_val is not None:
                 if old_val != new_val:
                     old_text = format_cell(old_val)
                     new_text = "[MOD] " + format_cell(new_val)
                 else:
+                    # This case should ideally not be displayed if we only show changes,
+                    # but keeping it for completeness.
                     old_text = format_cell(old_val)
                     new_text = format_cell(new_val)
             elif old_val is not None:
@@ -142,102 +144,74 @@ def format_timestamp_for_display(timestamp_str):
         return 'N/A'
     
     try:
-        # 如果是 ISO 格式 (2025-07-12T18:51:34.123456)
         if 'T' in timestamp_str:
-            # 移除微秒部分，只保留到秒
             if '.' in timestamp_str:
                 timestamp_str = timestamp_str.split('.')[0]
-            # 將 T 替換為空格
             return timestamp_str.replace('T', ' ')
-        
-        # 如果已經是正確格式，直接返回
         return timestamp_str
-        
     except ValueError as e:
         logging.error(f"格式化時間戳失敗: {timestamp_str}, 錯誤: {e}")
         return timestamp_str
 
 def compare_excel_changes(file_path, silent=False, event_number=None, is_polling=False):
     """
-    🔥 強制顯示 TABLE 的簡化版本 - 修正重複顯示問題
+    [修復 1 & 2] 修正重複顯示問題並整合作者資訊
     """
     try:
         from core.excel_parser import dump_excel_cells_with_timeout
         
         base_name = os.path.basename(file_path)
         
-        # 載入基準線
-        baseline_file = baseline_file_path(base_name)
-        old_baseline = load_baseline(baseline_file)
-        
+        old_baseline = load_baseline(base_name)
         if not old_baseline:
             if not silent:
                 print(f"❌ 找不到基準線: {base_name}")
             return False
         
-        # 讀取當前檔案內容
         current_data = dump_excel_cells_with_timeout(file_path, show_sheet_detail=False, silent=True)
         if not current_data:
             if not silent:
                 print(f"❌ 無法讀取檔案: {base_name}")
             return False
         
-        # 🔥 檢查內容是否真的有變化
         baseline_cells = old_baseline.get('cells', {})
-        
-        # 快速比較 - 如果結構完全相同，跳過顯示
         if baseline_cells == current_data:
+            # [修復 1] 內容無變化，直接返回 False，停止輪詢中的重複打印
             return False
         
-        # 比較變更
-        has_changes = False
-        changes_found = False
+        any_sheet_has_changes = False
         
-        # 為每個工作表進行比較
+        # [修復 2] 提前獲取作者資訊
+        old_author = old_baseline.get('last_author', 'N/A')
+        try:
+            new_author = get_excel_last_author(file_path)
+        except Exception:
+            new_author = 'Unknown'
+
         for worksheet_name in set(baseline_cells.keys()) | set(current_data.keys()):
             old_ws = baseline_cells.get(worksheet_name, {})
             new_ws = current_data.get(worksheet_name, {})
             
-            # 找出所有儲存格
             all_addresses = set(old_ws.keys()) | set(new_ws.keys())
             
-            # 🔥 準備顯示數據
             old_display_data = {}
             new_display_data = {}
+            sheet_has_changes = False
             
             for addr in all_addresses:
                 old_cell = old_ws.get(addr, {})
                 new_cell = new_ws.get(addr, {})
                 
-                old_val = old_cell.get('value')
-                new_val = new_cell.get('value')
-                old_formula = old_cell.get('formula')
-                new_formula = new_cell.get('formula')
-                
-                # 🔥 原本的邏輯：只要有任何變更就顯示
-                if old_val != new_val or old_formula != new_formula:
-                    has_changes = True
-                    changes_found = True
-                    
-                    # ⭐ 新增：外部參照特殊處理
-                    # 如果公式沒變但值有變，且包含外部參照，仍然要追蹤
-                    if (old_formula == new_formula and 
-                        old_val != new_val and 
-                        has_external_reference(old_formula)):
-                        print(f"🔗 外部參照更新: {addr} = {old_formula}")
-                    
-                    # 🔥 保持原本的顯示邏輯不變
-                    old_display_data[addr] = old_val
-                    new_display_data[addr] = new_val
+                # 比較時，同時比較 formula 和 value
+                if old_cell != new_cell:
+                    sheet_has_changes = True
+                    any_sheet_has_changes = True
+                    old_display_data[addr] = old_cell
+                    new_display_data[addr] = new_cell
             
-            # 🔥 如果有變更，強制顯示 TABLE
-            if (old_display_data or new_display_data) and not silent:
-                # 格式化時間顯示
+            if sheet_has_changes and not silent:
                 baseline_timestamp = old_baseline.get('timestamp', 'N/A')
                 current_timestamp = get_file_mtime(file_path)
-                
-                formatted_baseline_time = format_timestamp_for_display(baseline_timestamp)
-                formatted_current_time = format_timestamp_for_display(current_timestamp)
                 
                 print_aligned_console_diff(
                     old_display_data,
@@ -245,43 +219,33 @@ def compare_excel_changes(file_path, silent=False, event_number=None, is_polling
                     {
                         'filename': base_name,
                         'worksheet': worksheet_name,
-                        'baseline_time': formatted_baseline_time,
-                        'current_time': formatted_current_time
+                        'baseline_time': format_timestamp_for_display(baseline_timestamp),
+                        'current_time': format_timestamp_for_display(current_timestamp),
+                        'old_author': old_author, # [修復 2] 傳遞作者
+                        'new_author': new_author, # [修復 2] 傳遞作者
                     },
                     max_display_changes=settings.MAX_CHANGES_TO_DISPLAY
                 )
                 
-                # 記錄變更到 CSV
                 try:
                     log_changes_to_csv(file_path, worksheet_name, old_display_data, new_display_data, old_baseline)
                 except OSError as e:
                     logging.error(f"記錄變更到 CSV 時發生 I/O 錯誤: {e}")
         
-        # 🔥 重要：如果發現變更，立即更新基準線以避免重複顯示
-        if has_changes and not silent:
-            # 獲取當前檔案的作者
-            try:
-                current_author = get_excel_last_author(file_path)
-            except:
-                current_author = 'Unknown'
-            
-            # 更新基準線
+        # [修復 1] 只有在確實有變更時才更新基準線
+        if any_sheet_has_changes and not silent:
             updated_baseline = {
-                "last_author": current_author,
-                "content_hash": f"updated_{int(time.time())}",  # 簡單的雜湊
+                "last_author": new_author,
+                "content_hash": f"updated_{int(time.time())}",
                 "cells": current_data,
                 "timestamp": datetime.now().isoformat()
             }
             
-            # 保存更新的基準線
             from core.baseline import save_baseline
-            if save_baseline(base_name, updated_baseline):
-                # 不顯示更新訊息，避免太多輸出
-                pass
-            else:
+            if not save_baseline(base_name, updated_baseline):
                 print(f"[WARNING] 基準線更新失敗: {base_name}")
         
-        return has_changes
+        return any_sheet_has_changes
         
     except Exception as e:
         if not silent:
