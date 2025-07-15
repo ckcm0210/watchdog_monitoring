@@ -472,9 +472,6 @@ def update_baseline_after_meaningful_changes(file_path, base_name, current_data)
 
 
 
-
-
-
 def log_changes_to_csv(file_path, worksheet_name, old_data, new_data, baseline_data):
     """
     記錄變更到 CSV 檔案
