@@ -175,7 +175,15 @@ class ExcelFileEventHandler(FileSystemEventHandler):
         self.last_event_times[file_path] = current_time
         self.event_counter += 1
         
-        print(f"\n🔔 檔案變更偵測: {os.path.basename(file_path)} (事件 #{self.event_counter})")
+        # 獲取檔案最後作者
+        try:
+            from core.excel_parser import get_excel_last_author
+            last_author = get_excel_last_author(file_path)
+            author_info = f" (最後儲存者: {last_author})" if last_author != 'Unknown' else ""
+        except Exception as e:
+            author_info = ""
+        
+        print(f"\n🔔 檔案變更偵測: {os.path.basename(file_path)} (事件 #{self.event_counter}){author_info}")
         
         # 🔥 設定事件編號並立即執行一次比較
         from core.comparison import compare_excel_changes, set_current_event_number
