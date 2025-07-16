@@ -83,30 +83,22 @@ class BlackConsoleWindow:
         self.is_minimized = False
         
     def popup_window(self):
-        """彈出視窗到最上層 - 有新訊息時臨時置頂"""
+        """彈出視窗到最上層 - 有新訊息時"""
         if self.root and self.running:
             try:
-                self.root.deiconify()
+                self.root.deiconify()  # 將視窗從最小化還原
+                self.root.lift()  # 提升到最上層
+                self.root.focus_force()  # 強制獲取焦點
+
+                # 短暫閃爍效果來吸引注意
+                def flash_window():
+                    original_bg = self.root.cget('bg')
+                    self.root.configure(bg='darkred')
+                    self.root.after(200, lambda: self.root.configure(bg=original_bg))
                 
-                # 只有在不是置頂狀態時才設定置頂
-                if not self.is_topmost:
-                    self.root.attributes('-topmost', True)
-                    self.is_topmost = True
-                    self.root.lift()
-                    self.root.focus_force()
-                    
-                    # 短暫閃爍效果來吸引注意
-                    def flash_window():
-                        original_bg = self.root.cget('bg')
-                        self.root.configure(bg='darkred')
-                        self.root.after(200, lambda: self.root.configure(bg=original_bg))
-                    
-                    flash_window()
-                
+                flash_window()
+
                 self.is_minimized = False
-                
-                # 使用新的計時器方法，避免重複
-                self.schedule_disable_topmost(5000)
                 
             except Exception as e:
                 logging.error(f"彈出視窗失敗: {e}")
