@@ -170,22 +170,14 @@ def compare_excel_changes(file_path, silent=False, event_number=None, is_polling
         if old_baseline is None:
             old_baseline = {} # 將 None 視為空 baseline，觸發新增比較
         
-        # 循環重試讀取檔案，應對檔案鎖定
-        current_data = None
-        max_wait_seconds = 5
-        retry_interval = 0.5
-        start_time = time.time()
-
-        while time.time() - start_time < max_wait_seconds:
+        current_data = dump_excel_cells_with_timeout(file_path, show_sheet_detail=False, silent=True)
+        if not current_data:
+            time.sleep(1) # 等待1秒，應對檔案鎖定
             current_data = dump_excel_cells_with_timeout(file_path, show_sheet_detail=False, silent=True)
-            if current_data is not None:
-                break # 成功讀取，跳出循環
-            time.sleep(retry_interval)
-
-        if current_data is None:
-            if not silent:
-                print(f"❌ 經過 {max_wait_seconds} 秒重試後仍無法讀取檔案: {base_name}")
-            return False
+            if not current_data:
+                if not silent:
+                    print(f"❌ 重試後仍無法讀取檔案: {base_name}")
+                return False
         
         baseline_cells = old_baseline.get('cells', {})
         if baseline_cells == current_data:
