@@ -1,6 +1,3 @@
-"""
-檔案監控和輪詢功能
-"""
 import os
 import time
 import threading
@@ -149,6 +146,38 @@ class ExcelFileEventHandler(FileSystemEventHandler):
         self.last_event_times = {}
         self.event_counter = 0
         
+    def on_created(self, event):
+        """
+        檔案建立事件處理
+        """
+        if event.is_directory:
+            return
+
+        file_path = event.src_path
+
+        # [最終修正] 在處理前，先確認檔案是否仍然存在。
+        # 這可以處理「建立後立刻重新命名」的競爭條件，避免處理一個已不存在的檔案。
+        time.sleep(0.1) # 短暫等待，以確保 move 事件能被作業系統處理
+        if not os.path.exists(file_path):
+            # print(f"[DEBUG] 檔案 {os.path.basename(file_path)} 在處理前已消失，可能已被重新命名，跳過 on_created。")
+            return
+
+        # 檢查是否為支援的 Excel 檔案
+        if not file_path.lower().endswith(settings.SUPPORTED_EXTS):
+            return
+
+        # 檢查是否為臨時檔案
+        if os.path.basename(file_path).startswith('~$'):
+            return
+            
+        print(f"\n✨ 發現新檔案: {os.path.basename(file_path)}")
+        print(f"📊 正在建立基準線...")
+
+        from core.baseline import create_baseline_for_files_robust
+        create_baseline_for_files_robust([file_path])
+
+        print(f"✅ 基準線建立完成，已納入監控: {os.path.basename(file_path)}")
+
     def on_modified(self, event):
         """
         檔案修改事件處理
@@ -200,5 +229,44 @@ class ExcelFileEventHandler(FileSystemEventHandler):
         # 開始輪詢
         self.polling_handler.start_polling(file_path, self.event_counter)
 
+    def on_moved(self, event):
+        """
+        檔案/資料夾被移動或重新命名時觸發
+        """
+        if event.is_directory:
+            return
+
+        # 我們只關心重新命名後的檔案是否為 Excel 檔案
+        if not event.dest_path.lower().endswith(settings.SUPPORTED_EXTS):
+            return
+
+        print(f"\n➡️  偵測到檔案重新命名/移動:")
+        print(f"    來源: {os.path.basename(event.src_path)}")
+        print(f"    目的: {os.path.basename(event.dest_path)}")
+
+        from core.baseline import baseline_file_path, create_baseline_for_files_robust
+        
+        # 檢查舊檔案是否有對應的基準線
+        src_base_name = os.path.basename(event.src_path)
+        src_b_path = baseline_file_path(src_base_name)
+
+        if os.path.exists(src_b_path):
+            # 如果舊基準線存在，表示這是一個對已監控檔案的重新命名
+            dest_base_name = os.path.basename(event.dest_path)
+            dest_b_path = baseline_file_path(dest_base_name)
+            try:
+                os.rename(src_b_path, dest_b_path)
+                print(f"✅ 基準線已同步更新: {os.path.basename(src_b_path)} -> {os.path.basename(dest_b_path)}")
+            except OSError as e:
+                print(f"❌ 更新基準線名稱失敗: {e}")
+        else:
+            # 如果舊基準線不存在，這很可能就是「右鍵->新增->重新命名」的流程
+            # 我們將新的檔案視為一個全新的檔案來建立基準線
+            print(f"ℹ️  偵測到新檔案，正在建立基準線: {os.path.basename(event.dest_path)}")
+            create_baseline_for_files_robust([event.dest_path])
+            print(f"✅ 基準線建立完成: {os.path.basename(event.dest_path)}")
+
 # 創建全局輪詢處理器實例
 active_polling_handler = ActivePollingHandler()
+
+

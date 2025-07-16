@@ -73,7 +73,11 @@ def print_aligned_console_diff(old_data, new_data, file_info=None, max_display_c
     if file_info:
         filename = file_info.get('filename', 'Unknown')
         worksheet = file_info.get('worksheet', '')
-        caption = f"{filename} [Worksheet: {worksheet}]" if worksheet else filename
+        event_number = file_info.get('event_number')
+        file_path = file_info.get('file_path', filename)
+
+        event_str = f"(事件#{event_number}) " if event_number else ""
+        caption = f"{event_str}{file_path} [Worksheet: {worksheet}]" if worksheet else f"{event_str}{file_path}"
         for cap_line in wrap_text(caption, term_width):
             print(cap_line)
     print("=" * term_width)
@@ -163,15 +167,24 @@ def compare_excel_changes(file_path, silent=False, event_number=None, is_polling
         base_name = os.path.basename(file_path)
         
         old_baseline = load_baseline(base_name)
-        if not old_baseline:
-            if not silent:
-                print(f"❌ 找不到基準線: {base_name}")
-            return False
+        if old_baseline is None:
+            old_baseline = {} # 將 None 視為空 baseline，觸發新增比較
         
-        current_data = dump_excel_cells_with_timeout(file_path, show_sheet_detail=False, silent=True)
-        if not current_data:
+        # 循環重試讀取檔案，應對檔案鎖定
+        current_data = None
+        max_wait_seconds = 5
+        retry_interval = 0.5
+        start_time = time.time()
+
+        while time.time() - start_time < max_wait_seconds:
+            current_data = dump_excel_cells_with_timeout(file_path, show_sheet_detail=False, silent=True)
+            if current_data is not None:
+                break # 成功讀取，跳出循環
+            time.sleep(retry_interval)
+
+        if current_data is None:
             if not silent:
-                print(f"❌ 無法讀取檔案: {base_name}")
+                print(f"❌ 經過 {max_wait_seconds} 秒重試後仍無法讀取檔案: {base_name}")
             return False
         
         baseline_cells = old_baseline.get('cells', {})
@@ -218,11 +231,13 @@ def compare_excel_changes(file_path, silent=False, event_number=None, is_polling
                     new_display_data,
                     {
                         'filename': base_name,
+                        'file_path': file_path,
+                        'event_number': event_number,
                         'worksheet': worksheet_name,
                         'baseline_time': format_timestamp_for_display(baseline_timestamp),
                         'current_time': format_timestamp_for_display(current_timestamp),
-                        'old_author': old_author, # [修復 2] 傳遞作者
-                        'new_author': new_author, # [修復 2] 傳遞作者
+                        'old_author': old_author,
+                        'new_author': new_author,
                     },
                     max_display_changes=settings.MAX_CHANGES_TO_DISPLAY
                 )
@@ -477,11 +492,13 @@ def log_changes_to_csv(file_path, worksheet_name, old_data, new_data, baseline_d
     記錄變更到 CSV 檔案
     """
     try:
-        os.makedirs(os.path.dirname(settings.CSV_LOG_FILE), exist_ok=True)
+        from utils.helpers import human_readable_size
+        csv_path = settings.CSV_LOG_FILE
+        os.makedirs(os.path.dirname(csv_path), exist_ok=True)
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        file_exists = os.path.exists(settings.CSV_LOG_FILE)
+        file_exists = os.path.exists(csv_path)
         
-        with gzip.open(settings.CSV_LOG_FILE, 'at', encoding='utf-8', newline='') as f:
+        with gzip.open(csv_path, 'at', encoding='utf-8', newline='') as f:
             writer = csv.writer(f)
             
             if not file_exists:
@@ -513,7 +530,8 @@ def log_changes_to_csv(file_path, worksheet_name, old_data, new_data, baseline_d
                     change_type
                 ])
         
-        print(f"📝 變更已記錄到 CSV")
+        file_size = os.path.getsize(csv_path)
+        print(f"📝 變更已記錄到 {os.path.basename(csv_path)} ({human_readable_size(file_size)})")
         
     except (OSError, csv.Error) as e:
         logging.error(f"記錄變更到 CSV 時發生錯誤: {e}")
