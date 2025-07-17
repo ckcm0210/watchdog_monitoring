@@ -163,7 +163,7 @@ def create_baseline_for_files_robust(xlsx_files, skip_force_baseline=True):
         settings.baseline_completed = True
         return
     
-    print("\n" + "="*90 + "\n" + " BASELINE 建立程序 ".center(90, "=") + "\n" + "="*90)
+    print("\n" + "="*90 + "\n" + "BASELINE 建立程序".center(90) + "\n" + "="*90)
     
     # 檢查壓縮格式可用性
     available_formats = CompressionFormat.get_available_formats()
@@ -272,7 +272,8 @@ def create_baseline_for_files_robust(xlsx_files, skip_force_baseline=True):
                         print(f"  結果: [SAVE_ERROR]")
                         error_count += 1
             
-            print(f"  耗時: {time.time() - file_start_time:.2f} 秒\n")
+            print(f"  耗時: {time.time() - file_start_time:.2f} 秒")
+            print("")
             save_progress(i + 1, total)
             
         except (FileNotFoundError, PermissionError, OSError, json.JSONDecodeError) as e:
