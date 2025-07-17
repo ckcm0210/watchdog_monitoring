@@ -8,7 +8,7 @@ import logging
 
 class ActivePollingHandler:
     """
-    主動輪詢處理器，處理文件變更後的持續監控
+    主動輪詢處理器，採用新的智慧輪詢邏輯
     """
     def __init__(self):
         self.polling_tasks = {}
@@ -24,107 +24,57 @@ class ActivePollingHandler:
         except (FileNotFoundError, PermissionError, OSError) as e:
             logging.warning(f"獲取檔案大小失敗: {file_path}, 錯誤: {e}")
             file_size_mb = 0
-            
-        if file_size_mb < settings.POLLING_SIZE_THRESHOLD_MB:
-            print(f"[輪詢] 檔案: {os.path.basename(file_path)}（細file，密集輪詢，每{settings.DENSE_POLLING_INTERVAL_SEC}s，共{settings.DENSE_POLLING_DURATION_SEC}s）")
-            self._start_dense_polling(file_path, event_number)
-        else:
-            print(f"[輪詢] 檔案: {os.path.basename(file_path)}（大file，冷靜期輪詢，每{settings.SPARSE_POLLING_INTERVAL_SEC}s）")
-            self._start_sparse_polling(file_path, event_number)
 
-    def _start_dense_polling(self, file_path, event_number):
+        interval = settings.DENSE_POLLING_INTERVAL_SEC if file_size_mb < settings.POLLING_SIZE_THRESHOLD_MB else settings.SPARSE_POLLING_INTERVAL_SEC
+        polling_type = "密集" if file_size_mb < settings.POLLING_SIZE_THRESHOLD_MB else "稀疏"
+        
+        print(f"[輪詢] 檔案: {os.path.basename(file_path)} ({polling_type}輪詢，每 {interval}s 檢查一次)")
+        self._start_adaptive_polling(file_path, event_number, interval)
+
+    def _start_adaptive_polling(self, file_path, event_number, interval):
         """
-        開始密集輪詢（小檔案）
+        開始自適應輪詢
         """
         with self.lock:
             if file_path in self.polling_tasks:
                 self.polling_tasks[file_path]['timer'].cancel()
-                
-            def task_wrapper(remaining_duration):
-                self._poll_dense(file_path, event_number, remaining_duration)
-                
-            timer = threading.Timer(settings.DENSE_POLLING_INTERVAL_SEC, task_wrapper, args=(settings.DENSE_POLLING_DURATION_SEC,))
-            self.polling_tasks[file_path] = {'timer': timer, 'remaining_duration': settings.DENSE_POLLING_DURATION_SEC}
-            timer.start()
-            print(f"    [輪詢啟動] {os.path.basename(file_path)}")
 
-    def _poll_dense(self, file_path, event_number, remaining_duration):
-        """
-        執行密集輪詢
-        """
-        if self.stop_event.is_set(): 
-            return
-            
-        print(f"    [輪詢倒數] {os.path.basename(file_path)}，尚餘: {remaining_duration}s")
-        
-        # 🔥 設定事件編號並執行比較
-        from core.comparison import compare_excel_changes, set_current_event_number
-        set_current_event_number(event_number)
-        has_changes = compare_excel_changes(file_path, silent=False, event_number=event_number, is_polling=True)
-        
-        with self.lock:
-            if file_path not in self.polling_tasks: 
-                return
-                
-            if has_changes:
-                self.polling_tasks[file_path]['remaining_duration'] = settings.DENSE_POLLING_DURATION_SEC
-            else:
-                self.polling_tasks[file_path]['remaining_duration'] -= settings.DENSE_POLLING_INTERVAL_SEC
-                
-            new_remaining_duration = self.polling_tasks[file_path]['remaining_duration']
-            
-            if new_remaining_duration > 0:
-                def task_wrapper(): 
-                    self._poll_dense(file_path, event_number, new_remaining_duration)
-                new_timer = threading.Timer(settings.DENSE_POLLING_INTERVAL_SEC, task_wrapper)
-                self.polling_tasks[file_path]['timer'] = new_timer
-                new_timer.start()
-            else:
-                print(f"    [輪詢結束] {os.path.basename(file_path)}")
-                self.polling_tasks.pop(file_path, None)
-
-    def _start_sparse_polling(self, file_path, event_number):
-        """
-        開始稀疏輪詢（大檔案）
-        """
-        with self.lock:
-            if file_path in self.polling_tasks:
-                self.polling_tasks[file_path]['timer'].cancel()
-                
             def task_wrapper():
-                self._poll_sparse(file_path, event_number)
-                
-            timer = threading.Timer(settings.SPARSE_POLLING_INTERVAL_SEC, task_wrapper)
-            self.polling_tasks[file_path] = {'timer': timer, 'waiting': True}
-            timer.start()
-            print(f"    [冷靜期啟動] {os.path.basename(file_path)}")
+                self._poll_for_stability(file_path, event_number, interval)
 
-    def _poll_sparse(self, file_path, event_number):
+            timer = threading.Timer(interval, task_wrapper)
+            self.polling_tasks[file_path] = {'timer': timer}
+            timer.start()
+            print(f"    [輪詢啟動] {interval} 秒後首次檢查 {os.path.basename(file_path)}")
+
+    def _poll_for_stability(self, file_path, event_number, interval):
         """
-        執行稀疏輪詢
+        執行輪詢檢查，如果檔案變更則延長輪詢，否則結束
         """
-        if self.stop_event.is_set(): 
+        if self.stop_event.is_set():
             return
-            
-        print(f"    [冷靜期檢查] {os.path.basename(file_path)}")
-        
-        # 🔥 設定事件編號並執行比較
+
+        print(f"    [輪詢檢查] 正在檢查 {os.path.basename(file_path)} 的變更...")
+
         from core.comparison import compare_excel_changes, set_current_event_number
         set_current_event_number(event_number)
         has_changes = compare_excel_changes(file_path, silent=False, event_number=event_number, is_polling=True)
-        
+
         with self.lock:
-            if file_path not in self.polling_tasks: 
+            if file_path not in self.polling_tasks:
                 return
-                
+
             if has_changes:
+                print(f"    [輪詢] 檔案仍在變更，延長等待時間，{interval} 秒後再次檢查。")
+                
                 def task_wrapper():
-                    self._poll_sparse(file_path, event_number)
-                new_timer = threading.Timer(settings.SPARSE_POLLING_INTERVAL_SEC, task_wrapper)
+                    self._poll_for_stability(file_path, event_number, interval)
+                
+                new_timer = threading.Timer(interval, task_wrapper)
                 self.polling_tasks[file_path]['timer'] = new_timer
                 new_timer.start()
             else:
-                print(f"    [冷靜期結束] {os.path.basename(file_path)}")
+                print(f"    [輪詢結束] {os.path.basename(file_path)} 檔案已穩定。")
                 self.polling_tasks.pop(file_path, None)
 
     def stop(self):
@@ -133,7 +83,7 @@ class ActivePollingHandler:
         """
         self.stop_event.set()
         with self.lock:
-            for task in self.polling_tasks.values(): 
+            for task in self.polling_tasks.values():
                 task['timer'].cancel()
             self.polling_tasks.clear()
 
@@ -211,6 +161,13 @@ class ExcelFileEventHandler(FileSystemEventHandler):
         from core.comparison import compare_excel_changes, set_current_event_number
         set_current_event_number(self.event_counter)
         
+        # 檢查檔案是否已經在輪詢中
+        if file_path in self.polling_handler.polling_tasks:
+            # 如果檔案已經在輪詢中，則忽略本次 on_modified 事件
+            # 輪詢器會負責在指定間隔後檢查檔案狀態
+            print(f"    [偵測] {os.path.basename(file_path)} 正在輪詢中，忽略本次即時檢查。")
+            return
+
         print(f"📊 立即檢查變更...")
         has_changes = compare_excel_changes(file_path, silent=False, event_number=self.event_counter, is_polling=False)
         
