@@ -87,8 +87,13 @@ class BlackConsoleWindow:
         if self.root and self.running:
             try:
                 self.root.deiconify()  # 將視窗從最小化還原
-                self.root.lift()  # 提升到最上層
-                self.root.focus_force()  # 強制獲取焦點
+                
+                # 🔥 關鍵修正：短暫置頂以強制彈出，然後立即取消
+                self.root.attributes('-topmost', True)
+                self.root.lift()
+                self.root.focus_force()
+                # 使用 after 來確保置頂先生效，再取消
+                self.root.after(100, lambda: self.root.attributes('-topmost', False))
 
                 # 短暫閃爍效果來吸引注意
                 def flash_window():

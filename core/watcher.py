@@ -163,8 +163,6 @@ class ExcelFileEventHandler(FileSystemEventHandler):
         
         # 檢查檔案是否已經在輪詢中
         if file_path in self.polling_handler.polling_tasks:
-            # 如果檔案已經在輪詢中，則忽略本次 on_modified 事件
-            # 輪詢器會負責在指定間隔後檢查檔案狀態
             print(f"    [偵測] {os.path.basename(file_path)} 正在輪詢中，忽略本次即時檢查。")
             return
 
@@ -172,9 +170,9 @@ class ExcelFileEventHandler(FileSystemEventHandler):
         has_changes = compare_excel_changes(file_path, silent=False, event_number=self.event_counter, is_polling=False)
         
         if has_changes:
-            print(f"✅ 發現變更，開始輪詢監控...")
+            print(f"✅ 偵測到變更，啟動輪詢以監控後續活動...")
         else:
-            print(f"ℹ️  暫未發現變更，開始輪詢監控...")
+            print(f"ℹ️  未發現即時變更，啟動輪詢以監控後續活動...")
         
         # 開始輪詢
         self.polling_handler.start_polling(file_path, self.event_counter)
